@@ -2,9 +2,11 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
- * @title QubeSwap Token -v3
+ * @title QubeSwap Token -v3.1
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -15,6 +17,8 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  */
 contract QubeSwapToken {
 	using ECDSA for bytes32;
+    using SafeERC20 for IERC20;
+
     // --- Events ---
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -22,6 +26,14 @@ contract QubeSwapToken {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event StuckNativeRemoved(uint256 amount, address indexed recipient);
     event StuckTokenRemoved(address indexed token, uint256 amount, address indexed recipient);
+    event OwnerAdded(address indexed owner);
+    event OwnerRemoved(address indexed owner);
+    event StuckTokenRemoved(
+    address indexed token,      // Token address
+    address indexed recipient,  // Who received the tokens (e.g., owner)
+    uint256 amount               // Amount recovered
+);
+
 
     // --- Constants ---
     string public constant name = "QubeSwapToken";
@@ -35,8 +47,12 @@ contract QubeSwapToken {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => uint256) public nonces;
-    mapping(address => bool) public recoverableTokens;
+    mapping(address => bool) private _recoverableTokens;
     mapping(bytes32 => uint256) public queuedTransactions;
+
+    // Multi-owner state
+    address[] public owners;
+    mapping(address => bool) public isOwner;
 
     address public owner;
     bool public liveTrading = true;
@@ -51,7 +67,7 @@ contract QubeSwapToken {
         owner = msg.sender;
         balanceOf[owner] = MAX_SUPPLY;
         totalSupply = MAX_SUPPLY;
-
+        _addOwner(msg.sender); // Deployer is the first owner
         DOMAIN_SEPARATOR = _computeDomainSeparator();
     }
 
@@ -127,12 +143,12 @@ contract QubeSwapToken {
     }
 
     // --- Admin Functions ---
-    function queueTradeable(bool _status) external isOwner {
+    function queueTradeable(bool _status) external onlyOwner {
         bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
         queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
     }
 
-    function executeTradeable(bool _status) external isOwner {
+    function executeTradeable(bool _status) external onlyOwner {
         bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
         require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
         require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
@@ -140,30 +156,59 @@ contract QubeSwapToken {
         tradeable(_status);
     }
 
-    function tradeable(bool _status) public isOwner {
+    function tradeable(bool _status) public onlyOwner {
         liveTrading = _status;
         emit TradingStatusUpdated(_status);
     }
 
-    function transferOwnership(address newOwner) public isOwner {
+    // Owner management
+    function _addOwner(address _owner) internal {
+        require(!isOwner[_owner], "Already an owner");
+        owners.push(_owner);
+        isOwner[_owner] = true;
+        emit OwnerAdded(_owner);
+    }
+
+    function addOwner(address _owner) public onlyOwner {
+        _addOwner(_owner);
+    }
+
+    function removeOwner(address _owner) public onlyOwner {
+        require(_owner != msg.sender, "Cannot remove yourself");
+        require(isOwner[_owner], "Not an owner");
+        isOwner[_owner] = false;
+        emit OwnerRemoved(_owner);
+    }
+
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(owner, address(0));
+        owner = address(0);
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
         require(newOwner != address(0), "Ownable: new owner is zero address");
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
 
-    function removeStuckNative(uint256 amount) public isOwner {
+    function removeStuckNative(uint256 amount) public onlyOwner {
         payable(owner).transfer(amount);
         emit StuckNativeRemoved(amount, owner);
     }
 
-    function setRecoverableToken(address token, bool allowed) external isOwner {
-        recoverableTokens[token] = allowed;
+    function setRecoverableToken(address token, bool status) external onlyOwner {
+    _recoverableTokens[token] = status;
     }
 
-    function removeStuckToken(address token, uint256 amount) external isOwner {
-        require(recoverableTokens[token], "Not recoverable");
-        IERC20(token).transfer(owner, amount);
-        emit StuckTokenRemoved(token, amount, owner);
+    function removeStuckToken(
+       address tokenAddress,
+       uint256 amount
+    ) external onlyOwner {
+        require(_recoverableTokens[tokenAddress], "Token not recoverable");
+        IERC20(tokenAddress).safeTransfer(owner, amount);
+
+        // Fix: Add the recipient (owner) as the 2nd argument
+        emit StuckTokenRemoved(tokenAddress, owner, amount);
     }
 
     // --- Internal Functions ---
@@ -199,14 +244,14 @@ contract QubeSwapToken {
             );
     }
 
-    // --- Modifier ---
-    modifier isOwner() {
-        require(msg.sender == owner, "Ownable: caller is not the owner");
+    // Modifiers
+    modifier onlyOwner() {
+        require(isOwner[msg.sender], "Ownable: caller is not an owner");
         _;
     }
 }
 
 // Minimal ERC20 interface for recovery function
-interface IERC20 {
-    function transfer(address to, uint256 amount) external returns (bool);
-}
+//interface IERC20 {
+//    function transfer(address to, uint256 amount) external returns (bool);
+//}
