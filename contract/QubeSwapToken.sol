@@ -1,12 +1,20 @@
-/**
-      QST | a multi-chain token
-        qubeswap.com
-**/
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+
+/**
+ * @title QubeSwap Token -v3
+ * @author Mabble Protocol (@muroko)
+ * @notice QST is a multi-chain token
+ * @dev A custom ERC-20 token with EIP-2612 permit functionality.
+ * This token contract includes additional features such as trading status management,
+ * ownership transfer with timelock, and the ability to recover stuck native tokens * * and other tokens.
+ * @custom:security-contact security@mabble.io
+ * Website: qubeswap.com
+ */
 contract QubeSwapToken {
+	using ECDSA for bytes32;
     // --- Events ---
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -23,16 +31,19 @@ contract QubeSwapToken {
 
     // --- Storage ---
     uint256 public totalSupply;
+    uint256 public constant TIMELOCK_DURATION = 48 hours;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => uint256) public nonces;
+    mapping(address => bool) public recoverableTokens;
+    mapping(bytes32 => uint256) public queuedTransactions;
 
     address public owner;
     bool public liveTrading = true;
 
     // EIP-2612 Permit
     bytes32 private constant PERMIT_TYPEHASH =
-        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+        keccak256("Permit(address tokenOwner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
     bytes32 private immutable DOMAIN_SEPARATOR;
 
     // --- Constructor ---
@@ -108,7 +119,7 @@ contract QubeSwapToken {
         );
 
         bytes32 hash = keccak256(abi.encode(uint16(0x1901), DOMAIN_SEPARATOR, structHash));
-        address signer = ecrecover(hash, v, r, s);
+        address signer = ECDSA.recover(hash, v, r, s);
         require(signer == tokenOwner, "ERC20Permit: invalid signature");
 
         allowance[tokenOwner][spender] = value;
@@ -116,6 +127,19 @@ contract QubeSwapToken {
     }
 
     // --- Admin Functions ---
+    function queueTradeable(bool _status) external isOwner {
+        bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
+        queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
+    }
+
+    function executeTradeable(bool _status) external isOwner {
+        bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
+        require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
+        require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
+        delete queuedTransactions[txHash];
+        tradeable(_status);
+    }
+
     function tradeable(bool _status) public isOwner {
         liveTrading = _status;
         emit TradingStatusUpdated(_status);
@@ -132,7 +156,12 @@ contract QubeSwapToken {
         emit StuckNativeRemoved(amount, owner);
     }
 
-    function removeStuckToken(address token, uint256 amount) public isOwner {
+    function setRecoverableToken(address token, bool allowed) external isOwner {
+        recoverableTokens[token] = allowed;
+    }
+
+    function removeStuckToken(address token, uint256 amount) external isOwner {
+        require(recoverableTokens[token], "Not recoverable");
         IERC20(token).transfer(owner, amount);
         emit StuckTokenRemoved(token, amount, owner);
     }
