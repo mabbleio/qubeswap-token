@@ -4,36 +4,25 @@
 **/
 
 // SPDX-License-Identifier: MIT
-pragma solidity =0.8.17;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Capped.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "@openzeppelin/contracts/utils/Context.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
-  using SafeMath for unint256;
-  
+contract QubeSwapToken {
   string public constant name = "QubeSwapToken";
   string public constant symbol = "QST";
   uint8 public constant decimals = 18;
-  uint256 public constant MAX_SUPPLY = 100000000 * 10 ** decimals; //100M
 
-  bool public canTrade;
+  bool public liveTrading;
   address public owner;
   
   uint256 immutable public totalSupply;
-
   uint256 constant UINT256_MAX = type(uint256).max;
+  uint256 public constant MAX_SUPPLY = 100000000 * 10 ** decimals; //100M
 
-  mapping(address => uint256) private balanceOf;
   mapping (address => uint) public nonces;
-  //mapping (address => uint256) public balanceOf;
+  mapping (address => uint256) public balanceOf;
   mapping (address => mapping(address => uint256)) public allowance;
-  mapping(address => bool) public whitelist;
 
   bytes32 public immutable DOMAIN_SEPARATOR;
   bytes32 public constant PERMIT_TYPEHASH = keccak256(
@@ -43,16 +32,11 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
 
   event Transfer(address indexed from, address indexed to, uint256 amount);
   event Approval(address indexed owner, address indexed spender, uint256 amount);
-  
-  bool public trading; // true/false
-  
-  constructor() ERC20Capped(MAX_SUPPLY) {
-    //canTrade = true;
+
+  constructor() {
+    liveTrading = true;
     owner = msg.sender;
-	whitelist[msg.sender] = true;
     totalSupply = MAX_SUPPLY;
-	
-	balanceOf[owner()] = totalSupply;
 
     DOMAIN_SEPARATOR = keccak256(
       abi.encode(
@@ -64,42 +48,17 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
       )
     );
 
-    //unchecked {
-    //  balanceOf[address(msg.sender)] = balanceOf[address(msg.sender)] + totalSupply;
-    //}
+    unchecked {
+      balanceOf[address(msg.sender)] = balanceOf[address(msg.sender)] + totalSupply;
+    }
 
-    //emit Transfer(address(0), address(msg.sender), totalSupply);
-	emit Transfer(address(0), owner(), totalSupply);
-  }
-  
-  function name() public view returns (string memory) {
-    return name;
-  }
-
-  function symbol() public view returns (string memory) {
-    return symbol;
-  }
-
-  function decimals() public view returns (uint8) {
-    return decimals;
-  }
-
-  function maxSupply() public view override returns (uint256) {
-    return MAX_SUPPLY;
-  }
-
-  function balanceOf(address account) public view override returns (uint256) {
-    return balanceOf[account];
+    emit Transfer(address(0), address(msg.sender), totalSupply);
   }
 
   function approve(address spender, uint256 amount) external returns (bool) {
     _approve(msg.sender, spender, amount);
 
     return true;
-  }
-  
-  function allowance(address owner, address spender) public view override returns (uint256) {
-    return allowance[owner][spender];
   }
 
   function increaseAllowance(address spender, uint256 addedValue) external returns (bool) {
@@ -112,6 +71,10 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
     _approve(msg.sender, spender, allowance[msg.sender][spender] - subtractedValue);
 
     return true;
+  }
+
+  function maxSupply() external pure returns (uint256) {
+    return MAX_SUPPLY;
   }
 
   function transfer(address to, uint256 amount) external returns (bool) {
@@ -151,7 +114,7 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
     );
 
     address signer = ecrecover(digest, v, r, s);
-    require(signer != address(0) && signer == _owner, "ARB: INVALID_SIGNATURE");
+    require(signer != address(0) && signer == _owner, "QST: INVALID_SIGNATURE");
     _approve(_owner, _spender, amount);
   }
 
@@ -159,25 +122,18 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
     owner = newOwner;
   }
 
-  //function tradeable(bool active) public isOwner {
-  //  canTrade = active;
-  //}
+  function tradeable(bool toggle) public isOwner {
+    liveTrading = toggle; // toggle live trading true/false
+  }
   
-  function removeStuckNative(address _receiver) public onlyOwner {
-    payable(_receiver).transfer(address(this).balance);
+  // Recover stuck native tokens (ETH)
+  function removeStuckNative() external isOwner {
+    payable(msg.sender).transfer(address(this).balance);
   }
 
-  function removeStuckToken(address _token, address _receiver, uint256 _amount) public onlyOwner {
-    IERC20(_token).transfer(_receiver, _amount);
-  }
-  
-  function enableTrading() external onlyOwner {
-    require(!trading, "QST: Trading Already enabled");
-    trading = true;
-  }
-  
-  function setWhitelist(address _user, bool _exmpt) external onlyOwner{
-    whitelist[_user] = _exmpt;
+  // Recover stuck ERC20 tokens
+  function removeStuckToken(address _tokenAddress) external isOwner {
+    IERC20(_tokenAddress).transfer(msg.sender, IERC20(_tokenAddress).balanceOf(address(this)));
   }
 
   function _approve(address _owner, address _spender, uint256 amount) private {
@@ -187,27 +143,13 @@ contract QubeSwapToken is Context, IERC20, ERC20Permit, ERC20Capped, Ownable {
   }
 
   function _transfer(address from, address to, uint256 amount) private {
-    //require(canTrade || tx.origin == owner, "ARB: NOT_TRADEABLE");
-	require(from != address(0), "QST: Transfer from the zero address");
-    require(to != address(0), "QST: Transfer to the zero address");
-    require(amount > 0, "QST: Amount must be greater than zero");
-	
-	if (!whitelist[from] && !whitelist[to]) {
-        // trading disabled till launch
-        require(trading,"QST: Trading is disabled");
+    require(liveTrading || msg.sender == owner, "QST: Trading is disabled");
+
+    balanceOf[from] = balanceOf[from] - amount;
+
+    unchecked {
+      balanceOf[to] = balanceOf[to] + amount;
     }
-
-    //balanceOf[from] = balanceOf[from] - amount;
-
-    //unchecked {
-    //  balanceOf[to] = balanceOf[to] + amount;
-    //}
-	
-	balanceOf[from] = balanceOf[from].sub(
-        amount,
-        "QST: Insufficient balance"
-    );
-    balanceOf[to] = balanceOf[to].add(amount);
 
     allowance[from][to] = 0;
 
