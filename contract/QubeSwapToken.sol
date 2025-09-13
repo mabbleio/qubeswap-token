@@ -2,11 +2,11 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
- * @title QubeSwap Token -v3.1
+ * @title QubeSwap Token - v3.2
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -15,13 +15,13 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  * @custom:security-contact security@mabble.io
  * Website: qubeswap.com
  */
-contract QubeSwapToken {
+contract QubeSwapToken is IERC20, ReentrancyGuard {
 	using ECDSA for bytes32;
     using SafeERC20 for IERC20;
 
     // --- Events ---
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
+    //event Transfer(address indexed from, address indexed to, uint256 value);
+    //event Approval(address indexed owner, address indexed spender, uint256 value);
     event TradingStatusUpdated(bool indexed liveTrading);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event StuckNativeRemoved(uint256 amount, address indexed recipient);
@@ -143,12 +143,12 @@ contract QubeSwapToken {
     }
 
     // --- Admin Functions ---
-    function queueTradeable(bool _status) external onlyOwner {
+    function queueTradeable(bool _status) external onlyOwner nonReentrant {
         bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
         queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
     }
 
-    function executeTradeable(bool _status) external onlyOwner {
+    function executeTradeable(bool _status) external onlyOwner nonReentrant {
         bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
         require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
         require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
@@ -180,11 +180,6 @@ contract QubeSwapToken {
         emit OwnerRemoved(_owner);
     }
 
-    function renounceOwnership() public onlyOwner {
-        emit OwnershipTransferred(owner, address(0));
-        owner = address(0);
-    }
-
     function transferOwnership(address newOwner) public onlyOwner {
         require(newOwner != address(0), "Ownable: new owner is zero address");
         emit OwnershipTransferred(owner, newOwner);
@@ -196,14 +191,14 @@ contract QubeSwapToken {
         emit StuckNativeRemoved(amount, owner);
     }
 
-    function setRecoverableToken(address token, bool status) external onlyOwner {
-    _recoverableTokens[token] = status;
+    function setRecoverableToken(address token, bool status) external onlyOwner nonReentrant {
+        _recoverableTokens[token] = status;
     }
 
     function removeStuckToken(
        address tokenAddress,
        uint256 amount
-    ) external onlyOwner {
+    ) external onlyOwner nonReentrant {
         require(_recoverableTokens[tokenAddress], "Token not recoverable");
         IERC20(tokenAddress).safeTransfer(owner, amount);
 
@@ -213,20 +208,23 @@ contract QubeSwapToken {
 
     // --- Internal Functions ---
     function _transfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal {
-        require(to != address(0), "ERC20: transfer to zero address");
-        require(balanceOf[from] >= amount, "ERC20: transfer amount exceeds balance");
+       address from,
+       address to,
+       uint256 amount
+    ) internal virtual {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
 
-        // Trading restriction (owner can always transfer)
-        require(liveTrading || msg.sender == owner, "QST: trading is disabled");
+        // Cache the balance to avoid double read
+        uint256 fromBalance = balanceOf[from];
+        require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
 
+        // Use cached value for the subtraction
         unchecked {
-            balanceOf[from] -= amount;
-            balanceOf[to] += amount;
+           balanceOf[from] = fromBalance - amount;
         }
+           uint256 toBalance = balanceOf[to];
+           balanceOf[to] = toBalance + amount;
 
         emit Transfer(from, to, amount);
     }
