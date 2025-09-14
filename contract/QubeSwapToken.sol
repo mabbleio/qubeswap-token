@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
- * @title QubeSwap Token - v3.2
+ * @title QubeSwap Token - v3.3
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -19,6 +19,11 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 	using ECDSA for bytes32;
     using SafeERC20 for IERC20;
 
+    struct QueuedStatusChange {
+       bool newStatus;
+       uint256 timestamp;
+    }
+
     // --- Events ---
     //event Transfer(address indexed from, address indexed to, uint256 value);
     //event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -29,10 +34,10 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     event OwnerAdded(address indexed owner);
     event OwnerRemoved(address indexed owner);
     event StuckTokenRemoved(
-    address indexed token,      // Token address
-    address indexed recipient,  // Who received the tokens (e.g., owner)
-    uint256 amount               // Amount recovered
-);
+       address indexed token,      // Token address
+       address indexed recipient,  // Who received the tokens (e.g., owner)
+       uint256 amount               // Amount recovered
+    );
 
 
     // --- Constants ---
@@ -61,6 +66,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     bytes32 private constant PERMIT_TYPEHASH =
         keccak256("Permit(address tokenOwner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
     bytes32 private immutable DOMAIN_SEPARATOR;
+    QueuedStatusChange private _tradeableStatusChange;
 
     // --- Constructor ---
     constructor() {
@@ -143,22 +149,68 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Admin Functions ---
-    function queueTradeable(bool _status) external onlyOwner nonReentrant {
-        bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
-        queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
+    //function queueTradeable(bool _status) external onlyOwner nonReentrant {
+    //    bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
+    //    queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
+    //}
+    function queueTradeable(bool _status) external onlyOwner {
+        require(_tradeableStatusChange.timestamp == 0, "Change already queued");
+        _tradeableStatusChange = QueuedStatusChange({
+            newStatus: _status,
+            timestamp: block.timestamp + TIMELOCK_DURATION
+        });
+        emit TradingStatusQueued(_status, _tradeableStatusChange.timestamp);
     }
 
-    function executeTradeable(bool _status) external onlyOwner nonReentrant {
-        bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
-        require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
-        require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
-        delete queuedTransactions[txHash];
-        tradeable(_status);
+    //function executeTradeable(bool _status) external onlyOwner nonReentrant {
+    //    bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
+    //    require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
+    //    require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
+    //    delete queuedTransactions[txHash];
+    //    tradeable(_status);
+    //}
+    function executeTradeable() external onlyOwner {
+        require(
+            _tradeableStatusChange.timestamp != 0,
+            "No queued change"
+        );
+        require(
+            block.timestamp >= _tradeableStatusChange.timestamp,
+            "Timelock not expired"
+        );
+
+        // Validate the status change is as intended
+        bool newStatus = _tradeableStatusChange.newStatus;
+        require(
+            liveTrading != newStatus, // Prevent redundant execution
+            "Status already set"
+        );
+
+        liveTrading = newStatus;
+        emit TradingStatusUpdated(newStatus);
+
+        // Reset the queue
+        delete _tradeableStatusChange;
     }
 
-    function tradeable(bool _status) public onlyOwner {
-        liveTrading = _status;
-        emit TradingStatusUpdated(_status);
+    //function tradeable(bool _status) public onlyOwner {
+    //    liveTrading = _status;
+    //    emit TradingStatusUpdated(_status);
+    //}
+    // View function to check tradeable status (unchanged)
+    function tradeable() public view returns (bool) {
+        return liveTrading;
+    }
+
+    function queueSetLiveTrading(bool _status) external onlyOwner {
+        bytes32 txHash = keccak256(abi.encodePacked(_status, block.timestamp));
+        timelock.schedule(
+            address(this),
+            0, // value
+            abi.encodeWithSignature("setLiveTrading(bool)", _status),
+            block.timestamp + 48 hours,
+            txHash
+        );
     }
 
     // Owner management
