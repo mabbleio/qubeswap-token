@@ -4,9 +4,10 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /**
- * @title QubeSwap Token - v3.3
+ * @title QubeSwap Token - v3.4
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -27,24 +28,21 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     // --- Events ---
     //event Transfer(address indexed from, address indexed to, uint256 value);
     //event Approval(address indexed owner, address indexed spender, uint256 value);
+    event TradingStatusQueued(bool indexed status, uint256 timestamp);
     event TradingStatusUpdated(bool indexed liveTrading);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event StuckNativeRemoved(uint256 amount, address indexed recipient);
-    event StuckTokenRemoved(address indexed token, uint256 amount, address indexed recipient);
+    event StuckTokenRemoved(address indexed token, address indexed recipient, uint256 amount);
     event OwnerAdded(address indexed owner);
     event OwnerRemoved(address indexed owner);
-    event StuckTokenRemoved(
-       address indexed token,      // Token address
-       address indexed recipient,  // Who received the tokens (e.g., owner)
-       uint256 amount               // Amount recovered
-    );
-
 
     // --- Constants ---
     string public constant name = "QubeSwapToken";
     string public constant symbol = "QST";
     uint8 public constant decimals = 18;
     uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
+    // EIP-712
+    string public constant VERSION = "1";
 
     // --- Storage ---
     uint256 public totalSupply;
@@ -54,6 +52,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     mapping(address => uint256) public nonces;
     mapping(address => bool) private _recoverableTokens;
     mapping(bytes32 => uint256) public queuedTransactions;
+    mapping(address => uint256) private _nonces;
 
     // Multi-owner state
     address[] public owners;
@@ -61,6 +60,8 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
     address public owner;
     bool public liveTrading = true;
+    TimelockController public immutable timelock;
+    uint256 private nonce;
 
     // EIP-2612 Permit
     bytes32 private constant PERMIT_TYPEHASH =
@@ -75,6 +76,8 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         totalSupply = MAX_SUPPLY;
         _addOwner(msg.sender); // Deployer is the first owner
         DOMAIN_SEPARATOR = _computeDomainSeparator();
+        //require(_timelock != address(0), "Invalid timelock address");
+        //timelock = TimelockController(_timelock);
     }
 
     // --- Core Functions ---
@@ -117,7 +120,55 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         return true;
     }
 
-    // --- Permit (EIP-2612) ---
+    /**
+        * @dev Computes the EIP-712 typed data hash for permit signatures.
+        * @param structHash The hash of the permit struct (keccak256 of encoded data).
+        * @return The EIP-712 digest (hash of domain separator + structHash).
+    */
+    function _hashTypedDataV4(bytes32 structHash) internal view returns (bytes32) {
+        return _hashTypedDataV4(structHash, _getChainId(), address(this));
+    }
+
+    /**
+        * @dev Low-level function to compute the EIP-712 digest.
+    */
+    function _hashTypedDataV4(
+        bytes32 structHash,
+        uint256 chainId,
+        address verifyingContract
+    ) internal pure returns (bytes32) {
+        return
+            keccak256(
+                abi.encodePacked(
+                    "\x19\x01", // EIP-712 magic bytes
+                    _domainSeparatorV4(chainId, verifyingContract),
+                    structHash
+                )
+            );
+    }
+
+    /**
+        * @dev Computes the EIP-712 domain separator.
+    */
+    function _domainSeparatorV4(uint256 chainId, address verifyingContract) internal pure returns (bytes32) {
+        return
+            keccak256(
+                abi.encode(
+                    keccak256("EIP712Domain(uint256 chainId,address verifyingContract,bytes32 salt)"),
+                    chainId,
+                    verifyingContract,
+                    bytes32(0) // Salt (use a custom value if needed)
+                )
+            );
+    }
+
+    /**
+        * @dev Gets the current chain ID (for EIP-712 domain).
+    */
+    function _getChainId() internal view returns (uint256) {
+        return block.chainid;
+    }
+
     function permit(
         address tokenOwner,
         address spender,
@@ -126,26 +177,43 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) public {
-        require(block.timestamp <= deadline, "ERC20Permit: expired deadline");
+    ) external {
+        require(block.timestamp <= deadline, "Permit expired");
 
+        // 1. Compute the permit struct hash
         bytes32 structHash = keccak256(
             abi.encode(
-                PERMIT_TYPEHASH,
-                tokenOwner,
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                owner,
                 spender,
                 value,
-                nonces[tokenOwner]++,
+                _nonces[owner], // Current nonce (not incremented yet)
                 deadline
             )
         );
 
-        bytes32 hash = keccak256(abi.encode(uint16(0x1901), DOMAIN_SEPARATOR, structHash));
-        address signer = ECDSA.recover(hash, v, r, s);
-        require(signer == tokenOwner, "ERC20Permit: invalid signature");
+        // 2. Compute the EIP-712 digest
+        bytes32 digest = _hashTypedDataV4(structHash);
 
+        // 3. Verify the signature
+        address recoveredAddress = digest.recover(v, r, s);
+        require(recoveredAddress == owner, "Invalid signature");
+
+        // 4. Increment nonce ONLY after successful validation
+        _nonces[owner]++;
+
+        // 5. Set the allowance
         allowance[tokenOwner][spender] = value;
         emit Approval(tokenOwner, spender, value);
+    }
+
+    // Helper functions
+    function _useNonce(address tokenOwner) internal view returns (uint256) {
+        return _nonces[tokenOwner];
+    }
+
+    function _incrementNonce(address tokenOwner) internal {
+        _nonces[owner] = _nonces[tokenOwner] + 1;
     }
 
     // --- Admin Functions ---
@@ -178,17 +246,14 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
             block.timestamp >= _tradeableStatusChange.timestamp,
             "Timelock not expired"
         );
-
         // Validate the status change is as intended
         bool newStatus = _tradeableStatusChange.newStatus;
         require(
             liveTrading != newStatus, // Prevent redundant execution
             "Status already set"
         );
-
         liveTrading = newStatus;
         emit TradingStatusUpdated(newStatus);
-
         // Reset the queue
         delete _tradeableStatusChange;
     }
@@ -198,19 +263,44 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     //    emit TradingStatusUpdated(_status);
     //}
     // View function to check tradeable status (unchanged)
-    function tradeable() public view returns (bool) {
+    function checkliveTrading() public view returns (bool) {
         return liveTrading;
     }
 
-    function queueSetLiveTrading(bool _status) external onlyOwner {
-        bytes32 txHash = keccak256(abi.encodePacked(_status, block.timestamp));
+    //function queueSetLiveTrading(bool _status) external onlyOwner {
+    //    bytes32 txHash = keccak256(abi.encodePacked(_status, block.timestamp));
+    //    timelock.schedule(
+    //        address(this),
+    //        0, // value
+    //        abi.encodeWithSignature("setLiveTrading(bool)", _status),
+    //        keccak256(abi.encodePacked(nonce++)), // salt
+    //        block.timestamp + TIMELOCK_DURATION,
+    //        txHash
+    //    );
+   // }
+   function queueSetLiveTrading(bool newStatus) external {
+        bytes memory data = abi.encodeWithSignature(
+            "setTradingStatus(bool)",
+            newStatus
+        );
+        bytes32 salt = keccak256(abi.encodePacked(
+            block.timestamp,
+            msg.sender,
+            nonce++
+        ));
         timelock.schedule(
             address(this),
             0, // value
-            abi.encodeWithSignature("setLiveTrading(bool)", _status),
-            block.timestamp + 48 hours,
-            txHash
+            data,
+            bytes32(0),
+            salt,
+            block.timestamp + TIMELOCK_DURATION  // timestamp
         );
+    }
+
+    function setTradingStatus(bool newStatus) external {
+        require(msg.sender == address(timelock), "Only timelock");
+        liveTrading = newStatus;
     }
 
     // Owner management
