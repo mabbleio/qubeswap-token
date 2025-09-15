@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /**
- * @title QubeSwap Token - v3.4
+ * @title QubeSwap Token - v3.5
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -70,14 +70,14 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     QueuedStatusChange private _tradeableStatusChange;
 
     // --- Constructor ---
-    constructor() {
+    constructor(address payable _timelock) {
         owner = msg.sender;
         balanceOf[owner] = MAX_SUPPLY;
         totalSupply = MAX_SUPPLY;
         _addOwner(msg.sender); // Deployer is the first owner
         DOMAIN_SEPARATOR = _computeDomainSeparator();
-        //require(_timelock != address(0), "Invalid timelock address");
-        //timelock = TimelockController(_timelock);
+        require(_timelock != address(0), "Timelock address cannot be zero");
+        timelock = TimelockController(_timelock);
     }
 
     // --- Core Functions ---
@@ -184,10 +184,10 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         bytes32 structHash = keccak256(
             abi.encode(
                 keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
-                owner,
+                tokenOwner,
                 spender,
                 value,
-                _nonces[owner], // Current nonce (not incremented yet)
+                _nonces[tokenOwner], // Current nonce (not incremented yet)
                 deadline
             )
         );
@@ -197,10 +197,10 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
         // 3. Verify the signature
         address recoveredAddress = digest.recover(v, r, s);
-        require(recoveredAddress == owner, "Invalid signature");
+        require(recoveredAddress == tokenOwner, "Invalid signature");
 
         // 4. Increment nonce ONLY after successful validation
-        _nonces[owner]++;
+        _nonces[tokenOwner]++;
 
         // 5. Set the allowance
         allowance[tokenOwner][spender] = value;
@@ -213,7 +213,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     function _incrementNonce(address tokenOwner) internal {
-        _nonces[owner] = _nonces[tokenOwner] + 1;
+        _nonces[tokenOwner] = _nonces[tokenOwner] + 1;
     }
 
     // --- Admin Functions ---
