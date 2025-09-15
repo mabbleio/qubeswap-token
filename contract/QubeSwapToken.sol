@@ -7,12 +7,12 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /**
- * @title QubeSwap Token - v3.5
+ * @title QubeSwap Token - v3.6
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
- * This token contract includes additional features such as trading status management,
- * ownership transfer with timelock, and the ability to recover stuck native tokens * * and other tokens.
+ * This token contract provides a secure, feature-rich ERC-20 implementation with governance controls, 
+ * trading status management, token recovery mechanisms, and gasless approvals.
  * @custom:security-contact security@mabble.io
  * Website: qubeswap.com
  */
@@ -26,13 +26,12 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Events ---
-    //event Transfer(address indexed from, address indexed to, uint256 value);
-    //event Approval(address indexed owner, address indexed spender, uint256 value);
     event TradingStatusQueued(bool indexed status, uint256 timestamp);
     event TradingStatusUpdated(bool indexed liveTrading);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event StuckNativeRemoved(uint256 amount, address indexed recipient);
     event StuckTokenRemoved(address indexed token, address indexed recipient, uint256 amount);
+    event RecoverableTokenSet(address indexed token, bool allowed);
     event OwnerAdded(address indexed owner);
     event OwnerRemoved(address indexed owner);
 
@@ -49,7 +48,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     uint256 public constant TIMELOCK_DURATION = 48 hours;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
-    mapping(address => uint256) public nonces;
     mapping(address => bool) private _recoverableTokens;
     mapping(bytes32 => uint256) public queuedTransactions;
     mapping(address => uint256) private _nonces;
@@ -169,6 +167,9 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         return block.chainid;
     }
 
+    /**
+        * @dev Permits a spender to spend tokens on behalf of the token owner.
+    */
     function permit(
         address tokenOwner,
         address spender,
@@ -179,7 +180,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         bytes32 s
     ) external {
         require(block.timestamp <= deadline, "Permit expired");
-
         // 1. Compute the permit struct hash
         bytes32 structHash = keccak256(
             abi.encode(
@@ -191,7 +191,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
                 deadline
             )
         );
-
         // 2. Compute the EIP-712 digest
         bytes32 digest = _hashTypedDataV4(structHash);
 
@@ -217,10 +216,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Admin Functions ---
-    //function queueTradeable(bool _status) external onlyOwner nonReentrant {
-    //    bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
-    //    queuedTransactions[txHash] = block.timestamp + TIMELOCK_DURATION;
-    //}
     function queueTradeable(bool _status) external onlyOwner {
         require(_tradeableStatusChange.timestamp == 0, "Change already queued");
         _tradeableStatusChange = QueuedStatusChange({
@@ -230,13 +225,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         emit TradingStatusQueued(_status, _tradeableStatusChange.timestamp);
     }
 
-    //function executeTradeable(bool _status) external onlyOwner nonReentrant {
-    //    bytes32 txHash = keccak256(abi.encodePacked("tradeable", _status));
-    //    require(queuedTransactions[txHash] > 0, "Transaction not queued or already executed");
-    //    require(block.timestamp >= queuedTransactions[txHash], "Timelock not expired");
-    //    delete queuedTransactions[txHash];
-    //    tradeable(_status);
-    //}
     function executeTradeable() external onlyOwner {
         require(
             _tradeableStatusChange.timestamp != 0,
@@ -258,26 +246,11 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         delete _tradeableStatusChange;
     }
 
-    //function tradeable(bool _status) public onlyOwner {
-    //    liveTrading = _status;
-    //    emit TradingStatusUpdated(_status);
-    //}
     // View function to check tradeable status (unchanged)
     function checkliveTrading() public view returns (bool) {
         return liveTrading;
     }
 
-    //function queueSetLiveTrading(bool _status) external onlyOwner {
-    //    bytes32 txHash = keccak256(abi.encodePacked(_status, block.timestamp));
-    //    timelock.schedule(
-    //        address(this),
-    //        0, // value
-    //        abi.encodeWithSignature("setLiveTrading(bool)", _status),
-    //        keccak256(abi.encodePacked(nonce++)), // salt
-    //        block.timestamp + TIMELOCK_DURATION,
-    //        txHash
-    //    );
-   // }
    function queueSetLiveTrading(bool newStatus) external {
         bytes memory data = abi.encodeWithSignature(
             "setTradingStatus(bool)",
@@ -333,8 +306,33 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         emit StuckNativeRemoved(amount, owner);
     }
 
-    function setRecoverableToken(address token, bool status) external onlyOwner nonReentrant {
-        _recoverableTokens[token] = status;
+    /**
+        * @dev Sets whether a token can be recovered if accidentally sent to the contract
+        * @param tokenAddress The address of the token to whitelist/blacklist for recovery
+        * @param allowed Whether the token can be recovered (true) or not (false)
+    */
+    function setRecoverableToken(address tokenAddress, bool allowed) external onlyOwner {
+        // Input validation
+        require(tokenAddress != address(0), "Cannot whitelist zero address");
+        require(tokenAddress != address(this), "Cannot whitelist self");
+        require(tokenAddress != address(timelock), "Cannot whitelist timelock");
+        
+
+        // Additional safety check for ERC-20 tokens
+        if (tokenAddress != address(0)) {
+            try IERC20(tokenAddress).totalSupply() {
+                // Token exists and implements ERC-20
+            } catch {
+                revert("Token does not implement ERC-20 standard");
+            }
+        }
+
+        _recoverableTokens[tokenAddress] = allowed;
+        emit RecoverableTokenSet(tokenAddress, allowed);
+    }
+
+    function isRecoverableToken(address tokenAddress) external view returns (bool) {
+        return _recoverableTokens[tokenAddress];
     }
 
     function removeStuckToken(
@@ -390,8 +388,3 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         _;
     }
 }
-
-// Minimal ERC20 interface for recovery function
-//interface IERC20 {
-//    function transfer(address to, uint256 amount) external returns (bool);
-//}
