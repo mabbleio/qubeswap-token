@@ -4,10 +4,11 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/governance/TimelockController.sol";
+//import "@openzeppelin/contracts/governance/TimelockController.sol";
+import "../TimeLock/QubeTimelock.sol";
 
 /**
- * @title QubeSwap Token - v3.6
+ * @title QubeSwap Token - v3.7
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -45,7 +46,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
     // --- Storage ---
     uint256 public totalSupply;
-    uint256 public constant TIMELOCK_DURATION = 48 hours;
+    uint256 public constant TIMELOCK_DURATION = 24 hours;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) private _recoverableTokens;
@@ -90,7 +91,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         uint256 amount
     ) public returns (bool) {
         uint256 currentAllowance = allowance[from][msg.sender];
-        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
+        require(currentAllowance >= amount, "QST: transfer amount exceeds allowance");
 
         allowance[from][msg.sender] = currentAllowance - amount;
         _transfer(from, to, amount);
@@ -111,7 +112,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
     function decreaseAllowance(address spender, uint256 subtractedValue) public returns (bool) {
         uint256 currentAllowance = allowance[msg.sender][spender];
-        require(currentAllowance >= subtractedValue, "ERC20: decreased allowance below zero");
+        require(currentAllowance >= subtractedValue, "QST: decreased allowance below zero");
 
         allowance[msg.sender][spender] = currentAllowance - subtractedValue;
         emit Approval(msg.sender, spender, allowance[msg.sender][spender]);
@@ -352,12 +353,12 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
        address to,
        uint256 amount
     ) internal virtual {
-        require(from != address(0), "ERC20: transfer from the zero address");
-        require(to != address(0), "ERC20: transfer to the zero address");
+        require(from != address(0), "QST: transfer from the zero address");
+        require(to != address(0), "QST: transfer to the zero address");
 
         // Cache the balance to avoid double read
         uint256 fromBalance = balanceOf[from];
-        require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
+        require(fromBalance >= amount, "QST: transfer amount exceeds balance");
 
         // Use cached value for the subtraction
         unchecked {
