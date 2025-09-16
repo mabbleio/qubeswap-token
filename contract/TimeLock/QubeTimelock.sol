@@ -10,6 +10,7 @@ contract QubeTimelock is TimelockController {
     constructor(
         uint256 minDelay,
         address[] memory proposers,
-        address[] memory executors
-    ) TimelockController(minDelay, proposers, executors) {}
+        address[] memory executors,
+		address target
+    ) TimelockController(minDelay, proposers, executors, target) {}
 }
