@@ -6,12 +6,13 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
- * @title QubeSwap Token - v3.9
+ * @title QubeSwap Token - v4.0
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
- * This token contract provides a secure, feature-rich ERC-20 implementation with governance controls, 
- * trading status management, token recovery mechanisms, and gasless approvals.
+ * This token contract provides a secure, feature-rich ERC-20 implementation with 
+ * governance controls, trading status management, token recovery mechanisms, and 
+ * gasless approvals.
  * @custom:security-contact security@mabble.io
  * Website: qubeswap.com
  */
@@ -38,11 +39,11 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     string public constant name = "QubeSwapToken";
     string public constant symbol = "QST";
     uint8 public constant decimals = 18;
-    uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
+    uint256 private MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
 
     // --- Storage ---
     uint256 public totalSupply;
-    uint256 public constant TIMELOCK_DURATION = 1 hours;
+    uint256 public constant TIMELOCK_DURATION = 24 hours;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) private _recoverableTokens;
@@ -73,6 +74,10 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Core Functions ---
+    function maxSupply() public view returns (uint256) {
+        return MAX_SUPPLY;
+    }
+
     function transfer(address to, uint256 amount) public returns (bool) {
         _transfer(msg.sender, to, amount);
         return true;
