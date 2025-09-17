@@ -5,10 +5,10 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 //import "@openzeppelin/contracts/governance/TimelockController.sol";
-import "../TimeLock/QubeTimelock.sol";
+//import "../TimeLock/QubeTimelock.sol";
 
 /**
- * @title QubeSwap Token - v3.7
+ * @title QubeSwap Token - v3.8
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -42,11 +42,11 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     uint8 public constant decimals = 18;
     uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
     // EIP-712
-    string public constant VERSION = "1";
+    //string public constant VERSION = "1";
 
     // --- Storage ---
     uint256 public totalSupply;
-    uint256 public constant TIMELOCK_DURATION = 24 hours;
+    uint256 public constant TIMELOCK_DURATION = 1 hours;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) private _recoverableTokens;
@@ -59,7 +59,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
     address public owner;
     bool public liveTrading = true;
-    TimelockController public immutable timelock;
+    //TimelockController public immutable timelock;
     uint256 private nonce;
 
     // EIP-2612 Permit
@@ -69,14 +69,14 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     QueuedStatusChange private _tradeableStatusChange;
 
     // --- Constructor ---
-    constructor(address payable _timelock) {
+    constructor() {
         owner = msg.sender;
         balanceOf[owner] = MAX_SUPPLY;
         totalSupply = MAX_SUPPLY;
         _addOwner(msg.sender); // Deployer is the first owner
         DOMAIN_SEPARATOR = _computeDomainSeparator();
-        require(_timelock != address(0), "Timelock address cannot be zero");
-        timelock = TimelockController(_timelock);
+        //require(_qubetimelock != address(0), "Timelock address cannot be zero");
+        //timelock = TimelockController(_qubetimelock);
     }
 
     // --- Core Functions ---
@@ -179,7 +179,8 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
+    ) external nonReentrant {
+        _checkTradeableStatus(); // Check Live Trading Status
         require(block.timestamp <= deadline, "Permit expired");
         // 1. Compute the permit struct hash
         bytes32 structHash = keccak256(
@@ -217,7 +218,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Admin Functions ---
-    function queueTradeable(bool _status) external onlyOwner {
+    function queueTradeable(bool _status) external onlyOwner nonReentrant {
         require(_tradeableStatusChange.timestamp == 0, "Change already queued");
         _tradeableStatusChange = QueuedStatusChange({
             newStatus: _status,
@@ -226,7 +227,22 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         emit TradingStatusQueued(_status, _tradeableStatusChange.timestamp);
     }
 
-    function executeTradeable() external onlyOwner {
+    function getQueuedStatusChange() public view returns (bool, uint256) {
+        return (_tradeableStatusChange.newStatus, _tradeableStatusChange.timestamp);
+    }
+
+    function _checkTradeableStatus() internal {
+        if (_tradeableStatusChange.timestamp != 0 && block.timestamp >= _tradeableStatusChange.timestamp) {
+            bool newStatus = _tradeableStatusChange.newStatus;
+                if (liveTrading != newStatus) { // Avoid redundant updates
+                    liveTrading = newStatus;
+                    emit TradingStatusUpdated(newStatus);
+                }
+                delete _tradeableStatusChange;
+        }
+    }
+
+    /**function executeTradeable() external onlyOwner nonReentrant {
         require(
             _tradeableStatusChange.timestamp != 0,
             "No queued change"
@@ -250,9 +266,9 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     // View function to check tradeable status (unchanged)
     function checkliveTrading() public view returns (bool) {
         return liveTrading;
-    }
+    }**/
 
-   function queueSetLiveTrading(bool newStatus) external {
+   /**function queueSetLiveTrading(bool newStatus) external nonReentrant {
         bytes memory data = abi.encodeWithSignature(
             "setTradingStatus(bool)",
             newStatus
@@ -270,12 +286,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
             salt,
             block.timestamp + TIMELOCK_DURATION  // timestamp
         );
-    }
-
-    function setTradingStatus(bool newStatus) external {
-        require(msg.sender == address(timelock), "Only timelock");
-        liveTrading = newStatus;
-    }
+    }**/
 
     // Owner management
     function _addOwner(address _owner) internal {
@@ -312,11 +323,11 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         * @param tokenAddress The address of the token to whitelist/blacklist for recovery
         * @param allowed Whether the token can be recovered (true) or not (false)
     */
-    function setRecoverableToken(address tokenAddress, bool allowed) external onlyOwner {
+    function setRecoverableToken(address tokenAddress, bool allowed) external onlyOwner nonReentrant {
         // Input validation
         require(tokenAddress != address(0), "Cannot whitelist zero address");
         require(tokenAddress != address(this), "Cannot whitelist self");
-        require(tokenAddress != address(timelock), "Cannot whitelist timelock");
+        //require(tokenAddress != address(timelock), "Cannot whitelist timelock");
         
 
         // Additional safety check for ERC-20 tokens
@@ -353,6 +364,8 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
        address to,
        uint256 amount
     ) internal virtual {
+        _checkTradeableStatus(); // Check Live Trading Status
+        require(liveTrading || from == owner || to == owner, "QST: tranfer is disabled");
         require(from != address(0), "QST: transfer from the zero address");
         require(to != address(0), "QST: transfer to the zero address");
 
