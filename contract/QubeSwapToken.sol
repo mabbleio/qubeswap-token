@@ -4,11 +4,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-//import "@openzeppelin/contracts/governance/TimelockController.sol";
-//import "../TimeLock/QubeTimelock.sol";
 
 /**
- * @title QubeSwap Token - v3.8
+ * @title QubeSwap Token - v3.9
  * @author Mabble Protocol (@muroko)
  * @notice QST is a multi-chain token
  * @dev A custom ERC-20 token with EIP-2612 permit functionality.
@@ -41,8 +39,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     string public constant symbol = "QST";
     uint8 public constant decimals = 18;
     uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
-    // EIP-712
-    //string public constant VERSION = "1";
 
     // --- Storage ---
     uint256 public totalSupply;
@@ -59,7 +55,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
 
     address public owner;
     bool public liveTrading = true;
-    //TimelockController public immutable timelock;
     uint256 private nonce;
 
     // EIP-2612 Permit
@@ -75,8 +70,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         totalSupply = MAX_SUPPLY;
         _addOwner(msg.sender); // Deployer is the first owner
         DOMAIN_SEPARATOR = _computeDomainSeparator();
-        //require(_qubetimelock != address(0), "Timelock address cannot be zero");
-        //timelock = TimelockController(_qubetimelock);
     }
 
     // --- Core Functions ---
@@ -218,7 +211,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
     }
 
     // --- Admin Functions ---
-    function queueTradeable(bool _status) external onlyOwner nonReentrant {
+    function setTradeable(bool _status) external onlyOwner nonReentrant {
         require(_tradeableStatusChange.timestamp == 0, "Change already queued");
         _tradeableStatusChange = QueuedStatusChange({
             newStatus: _status,
@@ -227,7 +220,7 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
         emit TradingStatusQueued(_status, _tradeableStatusChange.timestamp);
     }
 
-    function getQueuedStatusChange() public view returns (bool, uint256) {
+    function getTradeableStatusChange() public view returns (bool, uint256) {
         return (_tradeableStatusChange.newStatus, _tradeableStatusChange.timestamp);
     }
 
@@ -241,52 +234,6 @@ contract QubeSwapToken is IERC20, ReentrancyGuard {
                 delete _tradeableStatusChange;
         }
     }
-
-    /**function executeTradeable() external onlyOwner nonReentrant {
-        require(
-            _tradeableStatusChange.timestamp != 0,
-            "No queued change"
-        );
-        require(
-            block.timestamp >= _tradeableStatusChange.timestamp,
-            "Timelock not expired"
-        );
-        // Validate the status change is as intended
-        bool newStatus = _tradeableStatusChange.newStatus;
-        require(
-            liveTrading != newStatus, // Prevent redundant execution
-            "Status already set"
-        );
-        liveTrading = newStatus;
-        emit TradingStatusUpdated(newStatus);
-        // Reset the queue
-        delete _tradeableStatusChange;
-    }
-
-    // View function to check tradeable status (unchanged)
-    function checkliveTrading() public view returns (bool) {
-        return liveTrading;
-    }**/
-
-   /**function queueSetLiveTrading(bool newStatus) external nonReentrant {
-        bytes memory data = abi.encodeWithSignature(
-            "setTradingStatus(bool)",
-            newStatus
-        );
-        bytes32 salt = keccak256(abi.encodePacked(
-            block.timestamp,
-            msg.sender,
-            nonce++
-        ));
-        timelock.schedule(
-            address(this),
-            0, // value
-            data,
-            bytes32(0),
-            salt,
-            block.timestamp + TIMELOCK_DURATION  // timestamp
-        );
-    }**/
 
     // Owner management
     function _addOwner(address _owner) internal {
