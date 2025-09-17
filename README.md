@@ -2,14 +2,32 @@
 
 Official QubeSwap Token [QST]
 
-QST is a multi-chain token
+## Official QST Contract Addresses
+### Origin-Contract on
+Qubetics Network:
+0x
 
-#### Key Features
+### Destination-Contracts on
+BSC Network:
+0x------
+
+
+
+#### Security & Best Practices
+QST is a secure, multi-owner ERC-20 token with:
 
 ✅ Standard ERC20 (transfer, approve, etc.). <br>
-✅ Gasless approvals via permit(). <br>
+✅ Gasless permits (EIP-2612) approvals. <br>
 ✅ Admin controls (tradeable, transferOwnership). <br>
-✅ Recovery for stuck ETH/ERC20. <br>
+✅ Recovery mechanisms for stuck ETH/ERC20. <br>
 ✅ EIP-712 for secure permit signatures. <br>
+✅ Reentrancy Protection: Uses ReentrancyGuard for critical functions <br>
+✅ Timelock Delays: 24-hour delay for trading status changes with 
+automatic execution. <br>
+✅ Input Validation: Checks for zero addresses, valid tokens, etc. <br>
+✅ SafeERC20: Prevents reentrancy in token transfers. <br>
+✅ Multi-Owner: Reduces single-point failure risk. <br>
+✅ EIP-712 Permits: Secure, typed signatures for gasless approvals. <br>
+✅ Input Validation: Checks for zero addresses, valid tokens, etc. <br>
 
 

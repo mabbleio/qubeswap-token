@@ -1,0 +1,5 @@
+# QubeSwap Token Technical Specs
+
+
+
+
