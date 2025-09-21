@@ -1,4 +1,4 @@
-# QubeSwap Token
+# QubeSwap Token | Discarded and Archived not in use
 
 Official QubeSwap Token [QST]
 
